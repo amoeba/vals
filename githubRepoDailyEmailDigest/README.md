@@ -1,5 +1,6 @@
 # GitHub Repo Daily Email Digest
 
-Sends you a daily email with a digest of the issue and pull request activity (opened, updated, closed) in a specific GitHub repository.
+Sends you a daily email with a digest of the issue and pull request activity
+(opened, updated, closed) for a set of GitHub repositories.
 
-![Screenshot 2024-12-20 at 5.01.40 PM.png](https://imagedelivery.net/iHX6Ovru0O7AjmyT5yZRoA/ee976fe2-c477-4aeb-9531-edd6e7851b00/public)
+![Screenshot 2025-09-12 at 6.30.51 PM.png](https://imagedelivery.net/iHX6Ovru0O7AjmyT5yZRoA/2851d7f8-33e9-430e-4665-5c441c4e8700/public)
