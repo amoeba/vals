@@ -1,5 +1,21 @@
 import { email } from "https://esm.town/v/std/email";
 
+// Configure which repositories to monitor
+const REPOS: Repository[] = [
+  { owner: "apache", repo: "arrow" },
+  { owner: "apache", repo: "arrow-adbc" },
+  { owner: "apache", repo: "arrow-go" },
+  { owner: "apache", repo: "arrow-js" },
+  { owner: "apache", repo: "arrow-dotnet" },
+  // Add more repositories here:
+  // { owner: "apache", repo: "arrow-adbc" },
+];
+
+// GitHub configuration and time setup
+const GITHUB_TOKEN = Deno.env.get("GITHUB_TOKEN");
+const today = new Date().toLocaleDateString();
+const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
 interface Repository {
   owner: string;
   repo: string;
@@ -20,7 +36,7 @@ interface RepoActivity {
 }
 
 interface DigestResult {
-  repos: RepoActivity[];
+  activities: RepoActivity[];
   totalStats: {
     issues: { opened: number; updated: number; closed: number };
     prs: { opened: number; updated: number; closed: number };
@@ -30,8 +46,7 @@ interface DigestResult {
 async function fetchRepoActivity(
   owner: string,
   repo: string,
-  headers: Record<string, string>,
-  twentyFourHoursAgo: string
+  headers: Record<string, string>
 ): Promise<RepoActivity> {
 
   // Fetch issues
@@ -73,20 +88,68 @@ async function fetchRepoActivity(
     ),
   };
 
-  const htmlDigest = `
+
+  return {
+    repository: { owner, repo },
+    issues: categorizedIssues,
+    prs: categorizedPRs,
+  };
+}
+
+function formatActivityShorthand(opened: number, updated: number, closed: number): string {
+  return `<div class="activity-grid">
+    <span class="activity-item activity-opened">${opened > 0 ? `+${opened}` : '&nbsp;'}</span>
+    <span class="activity-item activity-updated">${updated > 0 ? `~${updated}` : '&nbsp;'}</span>
+    <span class="activity-item activity-closed">${closed > 0 ? `-${closed}` : '&nbsp;'}</span>
+  </div>`;
+}
+
+function generateHtmlDigest(
+  repos: Repository[],
+  repoActivities: RepoActivity[],
+  totalStats: { issues: { opened: number; updated: number; closed: number }; prs: { opened: number; updated: number; closed: number } }
+): string {
+  // Pre-calculate shorthand strings for each repo
+  const repoShorthands = repoActivities.map(repoActivity => ({
+    repo: repoActivity,
+    issuesShorthand: formatActivityShorthand(
+      repoActivity.issues.opened.length,
+      repoActivity.issues.updated.length,
+      repoActivity.issues.closed.length
+    ),
+    prsShorthand: formatActivityShorthand(
+      repoActivity.prs.opened.length,
+      repoActivity.prs.updated.length,
+      repoActivity.prs.closed.length
+    )
+  }));
+
+  // Pre-calculate total shorthand strings
+  const totalIssuesShorthand = formatActivityShorthand(
+    totalStats.issues.opened,
+    totalStats.issues.updated,
+    totalStats.issues.closed
+  );
+  const totalPrsShorthand = formatActivityShorthand(
+    totalStats.prs.opened,
+    totalStats.prs.updated,
+    totalStats.prs.closed
+  );
+
+  return `
     <html>
       <head>
         <style>
           body { font-family: Arial, sans-serif; line-height: 1.6; }
           table {
-            width: 100%;
+            width: auto;
             border-collapse: collapse;
             margin-bottom: 20px;
             box-shadow: 0 1px 3px rgba(0,0,0,0.1);
           }
           th, td {
             border: 1px solid #ddd;
-            padding: 12px;
+            padding: 4px 8px;
             text-align: left;
           }
           th {
@@ -96,158 +159,127 @@ async function fetchRepoActivity(
           .opened { color: green; }
           .updated { color: orange; }
           .closed { color: red; }
+          .activity-opened { color: green; font-weight: bold; }
+          .activity-updated { color: #ff8800; font-weight: bold; }
+          .activity-closed { color: red; font-weight: bold; }
+          .activity-none { color: #999; }
+          h4 { margin-top: 15px; margin-bottom: 8px; }
+          a { color: #0366d6; text-decoration: underline; }
         </style>
       </head>
       <body>
-        <h1>Daily GitHub Digest for ${repos.length} Repository${repos.length > 1 ? 'ies' : ''}</h1>
+        <h1>Daily GitHub Digest for ${repos.length} ${repos.length === 1 ? 'Repository' : 'Repositories'}</h1>
         <p>Generated on: ${today}</p>
 
         <h2>Summary</h2>
         <table>
           <thead>
             <tr>
-              <th>Type</th>
-              <th class="opened">Opened</th>
-              <th class="updated">Updated</th>
-              <th class="closed">Closed</th>
-              <th>Total</th>
+              <th>Repo</th>
+              <th>Issues</th>
+              <th>PRs</th>
             </tr>
           </thead>
           <tbody>
-            <tr>
-              <td>Issues</td>
-              <td class="opened">${totalStats.issues.opened}</td>
-              <td class="updated">${totalStats.issues.updated}</td>
-              <td class="closed">${totalStats.issues.closed}</td>
-              <td>${totalStats.issues.opened + totalStats.issues.updated + totalStats.issues.closed}</td>
-            </tr>
-            <tr>
-              <td>Pull Requests</td>
-              <td class="opened">${totalStats.prs.opened}</td>
-              <td class="updated">${totalStats.prs.updated}</td>
-              <td class="closed">${totalStats.prs.closed}</td>
-              <td>${totalStats.prs.opened + totalStats.prs.updated + totalStats.prs.closed}</td>
-            </tr>
-            <tr>
+            ${repoShorthands.map(({ repo, issuesShorthand, prsShorthand }) => `
+              <tr>
+                <td><strong><a href="https://github.com/${repo.repository.owner}/${repo.repository.repo}" target="_blank">${repo.repository.owner}/${repo.repository.repo}</a></strong></td>
+                <td>${issuesShorthand}</td>
+                <td>${prsShorthand}</td>
+              </tr>
+            `).join('')}
+            <tr style="font-weight: bold;">
               <td><strong>Total</strong></td>
-              <td class="opened"><strong>${totalStats.issues.opened + totalStats.prs.opened}</strong></td>
-              <td class="updated"><strong>${totalStats.issues.updated + totalStats.prs.updated}</strong></td>
-              <td class="closed"><strong>${totalStats.issues.closed + totalStats.prs.closed}</strong></td>
-              <td><strong>${totalStats.issues.opened + totalStats.issues.updated + totalStats.issues.closed + totalStats.prs.opened + totalStats.prs.updated + totalStats.prs.closed}</strong></td>
+              <td><strong>${totalIssuesShorthand}</strong></td>
+              <td><strong>${totalPrsShorthand}</strong></td>
             </tr>
           </tbody>
         </table>
 
-        <h2>Repository Details</h2>
-        ${repoActivities.map(repoActivity => `
-          <h3>${repoActivity.repository.owner}/${repoActivity.repository.repo}</h3>
-          <table style="margin-bottom: 30px;">
-            <thead>
-              <tr>
-                <th>Type</th>
-                <th class="opened">Opened</th>
-                <th class="updated">Updated</th>
-                <th class="closed">Closed</th>
-                <th>Total</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>Issues</td>
-                <td class="opened">${repoActivity.issues.opened.length}</td>
-                <td class="updated">${repoActivity.issues.updated.length}</td>
-                <td class="closed">${repoActivity.issues.closed.length}</td>
-                <td>${repoActivity.issues.opened.length + repoActivity.issues.updated.length + repoActivity.issues.closed.length}</td>
-              </tr>
-              <tr>
-                <td>Pull Requests</td>
-                <td class="opened">${repoActivity.prs.opened.length}</td>
-                <td class="updated">${repoActivity.prs.updated.length}</td>
-                <td class="closed">${repoActivity.prs.closed.length}</td>
-                <td>${repoActivity.prs.opened.length + repoActivity.prs.updated.length + repoActivity.prs.closed.length}</td>
-              </tr>
-            </tbody>
-          </table>
-        `).join('')}
+        <p style="font-size: 0.9em; color: #666; margin-top: 10px;">
+          <strong>Legend:</strong> +created ~updated -closed
+        </p>
 
-        ${repoActivities.filter(repo =>
-    repo.issues.opened.length > 0 || repo.issues.updated.length > 0 || repo.issues.closed.length > 0 ||
-    repo.prs.opened.length > 0 || repo.prs.updated.length > 0 || repo.prs.closed.length > 0
-  ).map(repoActivity => `
-          <h2>${repoActivity.repository.owner}/${repoActivity.repository.repo} - Detailed Activity</h2>
+        ${repoActivities.map(repoActivity => {
+    const hasIssues = repoActivity.issues.opened.length > 0 || repoActivity.issues.updated.length > 0 || repoActivity.issues.closed.length > 0;
+    const hasPRs = repoActivity.prs.opened.length > 0 || repoActivity.prs.updated.length > 0 || repoActivity.prs.closed.length > 0;
 
-          ${repoActivity.issues.opened.length > 0 ? `
-            <h3>Newly Opened Issues (${repoActivity.issues.opened.length})</h3>
-            <ul>
-              ${repoActivity.issues.opened.map(issue => `
-                <li>
-                  <a href="${issue.html_url}">#${issue.number} ${issue.title}</a>
-                  by ${issue.user.login}
-                </li>
-              `).join('')}
-            </ul>
-          ` : ''}
+    return `
+            <h2><a href="https://github.com/${repoActivity.repository.owner}/${repoActivity.repository.repo}" target="_blank">${repoActivity.repository.owner}/${repoActivity.repository.repo}</a></h2>
 
-          ${repoActivity.issues.updated.length > 0 ? `
-            <h3>Updated Issues (${repoActivity.issues.updated.length})</h3>
-            <ul>
-              ${repoActivity.issues.updated.map(issue => `
-                <li>
-                  <a href="${issue.html_url}">#${issue.number} ${issue.title}</a>
-                  last updated by ${issue.user.login}
-                </li>
-              `).join('')}
-            </ul>
-          ` : ''}
+            <h3>Issues</h3>
+            ${hasIssues ? '' : '<p style="color: #666; font-style: italic;">No issue activity in the last 24 hours.</p>'}
+            ${repoActivity.issues.opened.length > 0 ? `
+              <h4><span class="activity-opened">Newly Opened</span> (${repoActivity.issues.opened.length})</h4>
+              <ul>
+                ${repoActivity.issues.opened.map(issue => `
+                  <li>
+                    <a href="${issue.html_url}">#${issue.number} ${issue.title}</a>
+                    by ${issue.user.login}
+                  </li>
+                `).join('')}
+              </ul>
+            ` : ''}
+            ${repoActivity.issues.updated.length > 0 ? `
+              <h4><span class="activity-updated">Updated</span> (${repoActivity.issues.updated.length})</h4>
+              <ul>
+                ${repoActivity.issues.updated.map(issue => `
+                  <li>
+                    <a href="${issue.html_url}">#${issue.number} ${issue.title}</a>
+                    last updated by ${issue.user.login}
+                  </li>
+                `).join('')}
+              </ul>
+            ` : ''}
+            ${repoActivity.issues.closed.length > 0 ? `
+              <h4><span class="activity-closed">Closed</span> (${repoActivity.issues.closed.length})</h4>
+              <ul>
+                ${repoActivity.issues.closed.map(issue => `
+                  <li>
+                    <a href="${issue.html_url}">#${issue.number} ${issue.title}</a>
+                    closed by ${issue.user.login}
+                  </li>
+                `).join('')}
+              </ul>
+            ` : ''}
 
-          ${repoActivity.issues.closed.length > 0 ? `
-            <h3>Closed Issues (${repoActivity.issues.closed.length})</h3>
-            <ul>
-              ${repoActivity.issues.closed.map(issue => `
-                <li>
-                  <a href="${issue.html_url}">#${issue.number} ${issue.title}</a>
-                  closed by ${issue.user.login}
-                </li>
-              `).join('')}
-            </ul>
-          ` : ''}
-
-          ${repoActivity.prs.opened.length > 0 ? `
-            <h3>Newly Opened PRs (${repoActivity.prs.opened.length})</h3>
-            <ul>
-              ${repoActivity.prs.opened.map(pr => `
-                <li>
-                  <a href="${pr.html_url}">#${pr.number} ${pr.title}</a>
-                  by ${pr.user.login}
-                </li>
-              `).join('')}
-            </ul>
-          ` : ''}
-
-          ${repoActivity.prs.updated.length > 0 ? `
-            <h3>Updated PRs (${repoActivity.prs.updated.length})</h3>
-            <ul>
-              ${repoActivity.prs.updated.map(pr => `
-                <li>
-                  <a href="${pr.html_url}">#${pr.number} ${pr.title}</a>
-                  last updated by ${pr.user.login}
-                </li>
-              `).join('')}
-            </ul>
-          ` : ''}
-
-          ${repoActivity.prs.closed.length > 0 ? `
-            <h3>Closed PRs (${repoActivity.prs.closed.length})</h3>
-            <ul>
-              ${repoActivity.prs.closed.map(pr => `
-                <li>
-                  <a href="${pr.html_url}">#${pr.number} ${pr.title}</a>
-                  closed by ${pr.user.login}
-                </li>
-              `).join('')}
-            </ul>
-          ` : ''}
-        `).join('')}
+            <h3>Pull Requests</h3>
+            ${hasPRs ? '' : '<p style="color: #666; font-style: italic;">No pull request activity in the last 24 hours.</p>'}
+            ${repoActivity.prs.opened.length > 0 ? `
+              <h4><span class="activity-opened">Newly Opened</span> (${repoActivity.prs.opened.length})</h4>
+              <ul>
+                ${repoActivity.prs.opened.map(pr => `
+                  <li>
+                    <a href="${pr.html_url}">#${pr.number} ${pr.title}</a>
+                    by ${pr.user.login}
+                  </li>
+                `).join('')}
+              </ul>
+            ` : ''}
+            ${repoActivity.prs.updated.length > 0 ? `
+              <h4><span class="activity-updated">Updated</span> (${repoActivity.prs.updated.length})</h4>
+              <ul>
+                ${repoActivity.prs.updated.map(pr => `
+                  <li>
+                    <a href="${pr.html_url}">#${pr.number} ${pr.title}</a>
+                    last updated by ${pr.user.login}
+                  </li>
+                `).join('')}
+              </ul>
+            ` : ''}
+            ${repoActivity.prs.closed.length > 0 ? `
+              <h4><span class="activity-closed">Closed</span> (${repoActivity.prs.closed.length})</h4>
+              <ul>
+                ${repoActivity.prs.closed.map(pr => `
+                  <li>
+                    <a href="${pr.html_url}">#${pr.number} ${pr.title}</a>
+                    closed by ${pr.user.login}
+                  </li>
+                `).join('')}
+              </ul>
+            ` : ''}
+          `;
+  }).join('')}
 
         <footer>
           <small>
@@ -259,35 +291,11 @@ async function fetchRepoActivity(
       </body>
     </html>
   `;
-
-  const repoNames = repos.length === 1
-    ? `${repos[0].owner}/${repos[0].repo}`
-    : `${repos.length} repositories`;
-
-  await email({
-    subject: `Daily GitHub Digest for ${repoNames} - ${today}`,
-    html: htmlDigest,
-  });
-
-  return {
-    repos: repoActivities,
-    totalStats,
-  };
-
-  return {
-    repository: { owner, repo },
-    issues: categorizedIssues,
-    prs: categorizedPRs,
-  };
 }
 
 export async function sendDailyEmail(
-  repos: Repository[] = [{ owner: "apache", repo: "arrow" }]
+  repos: Repository[] = REPOS
 ): Promise<DigestResult> {
-  const GITHUB_TOKEN = Deno.env.get("GITHUB_TOKEN");
-  const today = new Date().toLocaleDateString();
-  const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-
   const headers = {
     "Authorization": `token ${GITHUB_TOKEN}`,
     "Accept": "application/vnd.github.v3+json",
@@ -299,8 +307,7 @@ export async function sendDailyEmail(
     const activity = await fetchRepoActivity(
       repository.owner,
       repository.repo,
-      headers,
-      twentyFourHoursAgo
+      headers
     );
     repoActivities.push(activity);
   }
@@ -321,15 +328,31 @@ export async function sendDailyEmail(
       prs: { opened: 0, updated: 0, closed: 0 },
     }
   );
+
+  // Generate HTML digest
+  const htmlDigest = generateHtmlDigest(repos, repoActivities, totalStats);
+
+  // Send email
+  const repoNames = repos.length === 1
+    ? `${repos[0].owner}/${repos[0].repo}`
+    : `${repos.length} repositories`;
+
+  await email({
+    subject: `Daily GitHub Digest for ${repoNames} - ${today}`,
+    html: htmlDigest,
+  });
+
+  return {
+    activities: repoActivities,
+    totalStats,
+  };
 }
 
 /**
  * Cron function that runs automatically
  */
 export default async function (interval: Interval) {
-  await sendDailyEmail([
-    { owner: "apache", repo: "arrow" }
-  ]);
+  await sendDailyEmail();
 }
 
 /**
@@ -337,11 +360,11 @@ export default async function (interval: Interval) {
  * Can be called directly to test
  */
 export async function manualTrigger(
-  repos: Repository[] = [{ owner: "apache", repo: "arrow" }, { owner: "apache", repo: "arrow-adbc" }]
+  repos: Repository[] = REPOS
 ) {
   const result = await sendDailyEmail(repos);
   console.log("Daily email sent successfully");
-  console.log(`Total across ${result.repos.length} repositories:`);
+  console.log(`Total across ${result.activities.length} repositories:`);
   console.log(
     `Issues: ${result.totalStats.issues.opened} opened, ${result.totalStats.issues.updated} updated, ${result.totalStats.issues.closed} closed`
   );
