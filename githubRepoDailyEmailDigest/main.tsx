@@ -1,18 +1,8 @@
 import { email } from "https://esm.town/v/std/email";
 
-// Configure which repositories to monitor
-const REPOS: Repository[] = [
-  { owner: "apache", repo: "arrow" },
-  { owner: "apache", repo: "arrow-adbc" },
-  { owner: "apache", repo: "arrow-go" },
-  { owner: "apache", repo: "arrow-js" },
-  { owner: "apache", repo: "arrow-dotnet" },
-  // Add more repositories here:
-  // { owner: "apache", repo: "arrow-adbc" },
-];
-
 // GitHub configuration and time setup
 const GITHUB_TOKEN = Deno.env.get("GITHUB_TOKEN");
+const GITHUB_REPOS = Deno.env.get("GITHUB_REPOS");
 const today = new Date().toLocaleDateString();
 const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
@@ -20,6 +10,34 @@ interface Repository {
   owner: string;
   repo: string;
 }
+
+// Parse repositories from environment variable
+function parseRepos(): Repository[] {
+  if (!GITHUB_REPOS) {
+    throw new Error("GITHUB_REPOS environment variable is not set. Format: owner/repo,owner/repo");
+  }
+
+  const repos = GITHUB_REPOS
+    .split(",")
+    .map(repoStr => repoStr.trim())
+    .filter(repoStr => repoStr.length > 0)
+    .map(repoStr => {
+      const parts = repoStr.split("/");
+      if (parts.length !== 2) {
+        throw new Error(`Invalid repository format: "${repoStr}". Expected format: owner/repo`);
+      }
+      return { owner: parts[0].trim(), repo: parts[1].trim() };
+    });
+
+  if (repos.length === 0) {
+    throw new Error("No repositories found in GITHUB_REPOS environment variable");
+  }
+
+  return repos;
+}
+
+// Configure which repositories to monitor
+const REPOS: Repository[] = parseRepos();
 
 interface RepoActivity {
   repository: Repository;
