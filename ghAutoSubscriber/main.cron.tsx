@@ -1,8 +1,12 @@
 import { email } from "https://esm.town/v/std/email";
 
 // Required environment variables:
-//   GITHUB_TOKEN  — personal access token with repo + notifications scopes
-//   GITHUB_ORGS   — comma-separated list of org logins, e.g. "my-org,another-org"
+//   GITHUB_TOKEN        — personal access token with repo + notifications scopes
+//   GITHUB_ORGS         — comma-separated list of org logins, e.g. "my-org,another-org"
+//
+// Optional environment variables:
+//   GITHUB_IGNORE_REPOS — comma-separated list of repo full_names or glob patterns to skip.
+//                         Supports * as a wildcard. e.g. "my-org/boring-repo,my-org/legacy-*"
 
 function requireEnv(name: string): string {
   const val = Deno.env.get(name);
@@ -10,11 +14,25 @@ function requireEnv(name: string): string {
   return val;
 }
 
+/** Returns true if `str` matches a glob pattern where `*` matches any sequence of characters. */
+function globMatch(pattern: string, str: string): boolean {
+  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+  return new RegExp(`^${escaped}$`).test(str);
+}
+
 const GITHUB_TOKEN = requireEnv("GITHUB_TOKEN");
 const GITHUB_ORGS = requireEnv("GITHUB_ORGS")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
+const IGNORE_PATTERNS: string[] = (Deno.env.get("GITHUB_IGNORE_REPOS") ?? "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+function shouldIgnore(fullName: string): boolean {
+  return IGNORE_PATTERNS.some((pattern) => globMatch(pattern, fullName));
+}
 
 const BASE = "https://api.github.com";
 
@@ -145,6 +163,10 @@ export default async function (_interval: unknown): Promise<void> {
 
     for (const repo of repos) {
       if (watched.has(repo.full_name)) continue;
+      if (shouldIgnore(repo.full_name)) {
+        console.log(`Skipping ${repo.full_name} (matches ignore pattern)`);
+        continue;
+      }
       await subscribe(repo.full_name);
       newSubs.push({ org, repo });
       console.log(`Subscribed to ${repo.full_name}`);
