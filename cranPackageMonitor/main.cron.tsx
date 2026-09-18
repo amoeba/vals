@@ -10,8 +10,10 @@ const CRAN_BASE_URL = "https://cran.r-project.org/web/packages";
 interface PageVersion {
   package: string;
   etag: string | null;
+  lastModified: string | null;
   datetime: string;
   html: string;
+  htmlLength: number;
 }
 
 interface PackageHistory {
@@ -61,38 +63,139 @@ async function fetchPackagePage(packageName: string): Promise<{
 }
 
 /**
- * Generates a simple text diff between two HTML strings.
- * Shows lines that changed between versions.
+ * Generates a unified diff between two HTML strings.
+ * Shows context around changes with proper diff formatting.
  */
 function generateSimpleDiff(oldHtml: string, newHtml: string): string {
-  const oldLines = oldHtml.split("\n");
-  const newLines = newHtml.split("\n");
+  const oldLines = oldHtml.split("\n").map(l => l.trim()).filter(l => l.length > 0);
+  const newLines = newHtml.split("\n").map(l => l.trim()).filter(l => l.length > 0);
 
   const changes: string[] = [];
-  const maxLines = Math.max(oldLines.length, newLines.length);
+  const contextLines = 2; // Lines of context to show around changes
 
-  for (let i = 0; i < maxLines; i++) {
-    const oldLine = oldLines[i] || "";
-    const newLine = newLines[i] || "";
+  // Simple LCS-based diff
+  const diffs = computeDiff(oldLines, newLines);
 
-    if (oldLine !== newLine) {
-      if (oldLine && !newLine) {
-        changes.push(`- ${oldLine.trim()}`);
-      } else if (!oldLine && newLine) {
-        changes.push(`+ ${newLine.trim()}`);
-      } else {
-        changes.push(`- ${oldLine.trim()}`);
-        changes.push(`+ ${newLine.trim()}`);
+  let lastChangeIndex = -10;
+  for (let i = 0; i < diffs.length; i++) {
+    const diff = diffs[i];
+
+    // Skip if it's unchanged and not near a change
+    if (diff.type === "unchanged" && i - lastChangeIndex > contextLines + 1) {
+      // Show ellipsis for skipped sections
+      if (lastChangeIndex >= 0 && i - lastChangeIndex === contextLines + 2) {
+        changes.push("...");
       }
+      continue;
+    }
+
+    if (diff.type !== "unchanged") {
+      lastChangeIndex = i;
+    }
+
+    switch (diff.type) {
+      case "removed":
+        changes.push(`- ${diff.line}`);
+        break;
+      case "added":
+        changes.push(`+ ${diff.line}`);
+        break;
+      case "unchanged":
+        changes.push(`  ${diff.line}`);
+        break;
     }
   }
 
   // Limit diff output to avoid huge emails
-  if (changes.length > 50) {
-    return changes.slice(0, 50).join("\n") + `\n... (${changes.length - 50} more changes)`;
+  if (changes.length > 100) {
+    return changes.slice(0, 100).join("\n") + `\n... (${changes.length - 100} more lines)`;
   }
 
-  return changes.join("\n");
+  return changes.length > 0 ? changes.join("\n") : "No significant changes detected";
+}
+
+/**
+ * Simple diff algorithm using longest common subsequence approach.
+ */
+function computeDiff(oldLines: string[], newLines: string[]): Array<{type: "added" | "removed" | "unchanged", line: string}> {
+  const lcs = longestCommonSubsequence(oldLines, newLines);
+  const result: Array<{type: "added" | "removed" | "unchanged", line: string}> = [];
+
+  let oldIdx = 0;
+  let newIdx = 0;
+  let lcsIdx = 0;
+
+  while (oldIdx < oldLines.length || newIdx < newLines.length) {
+    if (lcsIdx < lcs.length) {
+      // Check if current old line matches LCS
+      if (oldIdx < oldLines.length && oldLines[oldIdx] === lcs[lcsIdx]) {
+        result.push({ type: "unchanged", line: oldLines[oldIdx] });
+        oldIdx++;
+        newIdx++;
+        lcsIdx++;
+        continue;
+      }
+
+      // Check if current new line matches LCS
+      if (newIdx < newLines.length && newLines[newIdx] === lcs[lcsIdx]) {
+        result.push({ type: "unchanged", line: newLines[newIdx] });
+        oldIdx++;
+        newIdx++;
+        lcsIdx++;
+        continue;
+      }
+    }
+
+    // Handle removals and additions
+    if (oldIdx < oldLines.length && (lcsIdx >= lcs.length || oldLines[oldIdx] !== lcs[lcsIdx])) {
+      result.push({ type: "removed", line: oldLines[oldIdx] });
+      oldIdx++;
+    }
+
+    if (newIdx < newLines.length && (lcsIdx >= lcs.length || newLines[newIdx] !== lcs[lcsIdx])) {
+      result.push({ type: "added", line: newLines[newIdx] });
+      newIdx++;
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Computes longest common subsequence between two arrays of strings.
+ */
+function longestCommonSubsequence(a: string[], b: string[]): string[] {
+  const m = a.length;
+  const n = b.length;
+  const dp: number[][] = Array(m + 1).fill(0).map(() => Array(n + 1).fill(0));
+
+  // Build LCS table
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      if (a[i - 1] === b[j - 1]) {
+        dp[i][j] = dp[i - 1][j - 1] + 1;
+      } else {
+        dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+      }
+    }
+  }
+
+  // Reconstruct LCS
+  const lcs: string[] = [];
+  let i = m, j = n;
+  while (i > 0 && j > 0) {
+    if (a[i - 1] === b[j - 1]) {
+      lcs.unshift(a[i - 1]);
+      i--;
+      j--;
+    } else if (dp[i - 1][j] > dp[i][j - 1]) {
+      i--;
+    } else {
+      j--;
+    }
+  }
+
+  return lcs;
 }
 
 /**
@@ -136,8 +239,10 @@ function analyzeChange(
   const currentVersion: PageVersion = {
     package: packageName,
     etag: current.etag,
+    lastModified: current.lastModified,
     datetime: new Date().toISOString(),
     html: current.html,
+    htmlLength: current.html.length,
   };
 
   // Case 1: First time checking this package
@@ -214,20 +319,86 @@ function buildEmailHtml(changes: CheckResult[]): string {
         break;
     }
 
+    // Build metadata section
+    const metadataRows: string[] = [];
+
+    if (change.previousVersion) {
+      const sizeDiff = change.currentVersion.htmlLength - change.previousVersion.htmlLength;
+      const sizeDiffStr = sizeDiff > 0 ? `+${sizeDiff}` : `${sizeDiff}`;
+      const sizeDiffColor = sizeDiff > 0 ? "#28a745" : sizeDiff < 0 ? "#dc3545" : "#6c757d";
+
+      metadataRows.push(`
+        <tr>
+          <td style="padding: 4px 8px; border-bottom: 1px solid #eee;"><strong>HTML Size:</strong></td>
+          <td style="padding: 4px 8px; border-bottom: 1px solid #eee;">
+            ${change.previousVersion.htmlLength.toLocaleString()} → ${change.currentVersion.htmlLength.toLocaleString()} bytes
+            <span style="color: ${sizeDiffColor}; margin-left: 8px;">(${sizeDiffStr})</span>
+          </td>
+        </tr>
+      `);
+    } else {
+      metadataRows.push(`
+        <tr>
+          <td style="padding: 4px 8px; border-bottom: 1px solid #eee;"><strong>HTML Size:</strong></td>
+          <td style="padding: 4px 8px; border-bottom: 1px solid #eee;">${change.currentVersion.htmlLength.toLocaleString()} bytes</td>
+        </tr>
+      `);
+    }
+
+    if (change.currentVersion.lastModified) {
+      metadataRows.push(`
+        <tr>
+          <td style="padding: 4px 8px; border-bottom: 1px solid #eee;"><strong>Last-Modified:</strong></td>
+          <td style="padding: 4px 8px; border-bottom: 1px solid #eee;">${change.currentVersion.lastModified}</td>
+        </tr>
+      `);
+    }
+
+    if (change.previousVersion?.lastModified) {
+      metadataRows.push(`
+        <tr>
+          <td style="padding: 4px 8px; border-bottom: 1px solid #eee;"><strong>Previous Last-Modified:</strong></td>
+          <td style="padding: 4px 8px; border-bottom: 1px solid #eee;">${change.previousVersion.lastModified}</td>
+        </tr>
+      `);
+    }
+
+    metadataRows.push(`
+      <tr>
+        <td style="padding: 4px 8px; border-bottom: 1px solid #eee;"><strong>Check Time:</strong></td>
+        <td style="padding: 4px 8px; border-bottom: 1px solid #eee;">${change.currentVersion.datetime}</td>
+      </tr>
+    `);
+
+    if (change.previousVersion) {
+      metadataRows.push(`
+        <tr>
+          <td style="padding: 4px 8px;"><strong>Previous Check:</strong></td>
+          <td style="padding: 4px 8px;">${change.previousVersion.datetime}</td>
+        </tr>
+      `);
+    }
+
+    const metadataSection = `
+      <table style="width: 100%; margin-top: 10px; border-collapse: collapse; font-size: 13px;">
+        ${metadataRows.join("")}
+      </table>
+    `;
+
     const diffSection = change.htmlDiff
       ? `
-      <details style="margin-top: 10px;">
-        <summary style="cursor: pointer; font-weight: bold;">View HTML Diff</summary>
-        <pre style="background-color: #f5f5f5; padding: 10px; overflow-x: auto; font-size: 12px;">${escapeHtml(change.htmlDiff)}</pre>
-      </details>`
+      <div style="margin-top: 15px;">
+        <h3 style="margin-bottom: 5px; font-size: 14px;">HTML Changes:</h3>
+        <pre style="background-color: #f8f8f8; border: 1px solid #ddd; padding: 12px; overflow-x: auto; font-size: 11px; line-height: 1.4; font-family: 'Courier New', monospace; white-space: pre-wrap; word-wrap: break-word;">${escapeHtml(change.htmlDiff)}</pre>
+      </div>`
       : "";
 
     return `
-      <div style="border: 1px solid #ddd; margin-bottom: 20px; padding: 15px; border-radius: 5px;">
-        <h2>${statusEmoji} ${change.packageName}</h2>
+      <div style="border: 1px solid #ddd; margin-bottom: 20px; padding: 15px; border-radius: 5px; background-color: #fefefe;">
+        <h2 style="margin-top: 0;">${statusEmoji} ${change.packageName}</h2>
         <p><strong>URL:</strong> <a href="${change.url}">${change.url}</a></p>
         <p><strong>Status:</strong> ${changeDescription}</p>
-        <p><strong>Checked:</strong> ${change.currentVersion.datetime}</p>
+        ${metadataSection}
         ${diffSection}
       </div>`;
   }).join("");
